@@ -1,0 +1,8 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Part of dvbt-rx: a stand-in for the header of this name that
+// SDRangel's modemdvb library includes, so the library builds without Qt.
+#pragma once
+#include <iostream>
+struct QDebugShim { template<class T> QDebugShim& operator<<(const T& t) { std::cerr << t << ' '; return *this; } ~QDebugShim() { std::cerr << '\n'; } };
+inline QDebugShim qWarning() { return QDebugShim(); }
+inline QDebugShim qDebug() { return QDebugShim(); }
