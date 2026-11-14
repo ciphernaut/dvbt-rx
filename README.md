@@ -39,17 +39,27 @@ dvbt-rx --rate 10000000 < multiplex.cf32
 - `--bandwidth auto|HZ`: the channel width. `auto` (the default) tries 8, 7, 6 and 5 MHz in turn,
   half a second of signal each, until one acquires.
 - `--every SECONDS`: the time between lines while locked (default 2).
+- `--no-filter`: skip the channel filter. By default the input is low-passed to the width being
+  tried (cut at half the channel width, 80 dB down inside the gap to the next channel), so an input
+  wider than the multiplex may carry its neighbours: unfiltered, a neighbour 20 dB or more above
+  the wanted multiplex takes the receiver's timing. The filter costs about 7 % of a core at 10 MS/s.
 - `--verbose`: the library's acquisition log on stderr.
 
 A line is printed when lock is gained or lost, when the signalled parameters change, every
 `--every` seconds of signal while locked and every 5 seconds while searching:
 
 ```json
-{"locked":true,"lock":"locked","bandwidth_hz":7000000,"mode":"8K","guard":"1/16","constellation":"64-QAM","code_rate":"3/4","hierarchy":null,"lp_code_rate":null,"cell_id":null,"offset_hz":690,"clock_ppm":3.8,"snr_db":12.3}
+{"locked":true,"lock":"locked","bandwidth_hz":7000000,"mode":"8K","guard":"1/16","constellation":"64-QAM","code_rate":"3/4","hierarchy":null,"lp_code_rate":null,"cell_id":null,"offset_hz":690,"clock_ppm":3.8,"snr_db":12.3,"ripple_db":16.6,"resyncs":0}
 ```
 
-`offset_hz` is the multiplex's carrier offset from the centre of the input, `clock_ppm` the sample
-clock error and `snr_db` the signal-to-noise ratio of the equalised cells. `cell_id` is `null` when
+`offset_hz` is the multiplex's carrier offset from the centre of the input and `clock_ppm` the
+sample clock error. `snr_db` is the mean error of the equalised pilot carriers against their known
+values, unweighted across the multiplex: carriers in a fade count as much as the rest, so a strong
+multiplex with deep multipath reads low, and below 0 dB while still locked. It is not the level
+over the noise floor. `ripple_db` is the spread of the channel's frequency response across the
+multiplex (flat is a few dB; multipath or a same-frequency network's second site makes it tens).
+`resyncs` counts the timing jumps the receiver recovered from without losing lock since it last
+acquired; each is usually samples lost on the way in. `cell_id` is `null` when
 the multiplex does not signal one, and `hierarchy` and `lp_code_rate` are `null` for a
 non-hierarchical multiplex. While nothing is locked every field but `locked` and `lock` is `null`.
 
