@@ -53,7 +53,10 @@ A line is printed when lock is gained or lost, when the signalled parameters cha
 ```
 
 `offset_hz` is the multiplex's carrier offset from the centre of the input and `clock_ppm` the
-sample clock error. `snr_db` is the mean error of the equalised pilot carriers against their known
+sample clock error. The input need not be centred exactly: a lock more than 0.5 % of the channel
+width off centre is taken again with the input mixed onto the multiplex, so the channel filter is
+cut round the multiplex itself. That works to about a tenth of the channel width off centre
+(tried at 766 kHz on a 7 MHz multiplex); further off, the first lock may not come. `snr_db` is the mean error of the equalised pilot carriers against their known
 values, unweighted across the multiplex: carriers in a fade count as much as the rest, so a strong
 multiplex with deep multipath reads low, and below 0 dB while still locked. It is not the level
 over the noise floor. `ripple_db` is the spread of the channel's frequency response across the

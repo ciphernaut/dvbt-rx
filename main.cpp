@@ -20,6 +20,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <complex>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -195,6 +196,10 @@ const int widths[] = {8000000, 7000000, 6000000, 5000000};
 const double trySeconds = 0.5;
 // Signal seconds between lines while nothing is locked.
 const double searchEvery = 5.0;
+// A lock further than this fraction of the channel width from the input's centre is taken
+// again with the input recentred on it (the filter's passband clears the outermost carriers
+// by about 1.7 % of the width).
+const double recentreFraction = 0.005;
 // The library resamples between these ratios of input to receiver rate.
 const double minRatio = 0.8;
 const double maxRatio = 2.2;
@@ -313,12 +318,12 @@ std::string rippleOf(const dvbt::OFDMDemod& demod)
     return text;
 }
 
-void print(const Report& report, const dvbt::OFDMDemod::Status& status, const std::string& ripple)
+void print(const Report& report, const dvbt::OFDMDemod::Status& status, const std::string& ripple, double shift)
 {
     if (report.m_locked)
     {
         printf("{\"locked\":true,\"lock\":\"locked\",\"bandwidth_hz\":%d,%s,\"offset_hz\":%ld,\"clock_ppm\":%.1f,\"snr_db\":%.1f,\"ripple_db\":%s,\"resyncs\":%llu}\n",
-            report.m_bandwidth, report.m_parameters.c_str(), std::lround(status.m_frequencyOffset), status.m_clockOffset, status.m_snr,
+            report.m_bandwidth, report.m_parameters.c_str(), std::lround(shift + status.m_frequencyOffset), status.m_clockOffset, status.m_snr,
             ripple.c_str(), (unsigned long long) status.m_resyncs);
     }
     else
@@ -397,11 +402,56 @@ int main(int argc, char **argv)
     double acquiringSince = 0.0;
     size_t count;
 
+    // The input is mixed down by `shift` first, once a lock has shown the multiplex to sit that
+    // far from the input's centre: the channel filter is then cut round the multiplex, not
+    // round where the job was started
+    double shift = 0.0;         // Hz
+    double mixerPhase = 0.0;    // Cycles
+    std::vector<dvbt::Cf> mixed;
+
     while ((count = fread(input.data(), sizeof(dvbt::Cf), input.size(), stdin)) > 0)
     {
-        chain->process(input.data(), (int) count);
+        if (shift != 0.0)
+        {
+            const double twoPi = 6.283185307179586;
+            const double step = -shift / rate; // Cycles a sample
+            const std::complex<double> w = std::polar(1.0, twoPi * step);
+            std::complex<double> phasor = std::polar(1.0, twoPi * mixerPhase); // Exact at each block
+            mixed.resize(count);
+
+            for (size_t i = 0; i < count; i++)
+            {
+                mixed[i] = input[i] * dvbt::Cf((float) phasor.real(), (float) phasor.imag());
+                phasor *= w;
+            }
+
+            mixerPhase += step * (double) count;
+            mixerPhase -= std::floor(mixerPhase);
+            chain->process(mixed.data(), (int) count);
+        }
+        else
+        {
+            chain->process(input.data(), (int) count);
+        }
+
         seconds += count / rate;
         dvbt::OFDMDemod::Status status = chain->m_demod.getStatus();
+
+        if ((status.m_state == dvbt::OFDMDemod::Locked) && status.m_tpsValid
+            && (std::abs(status.m_frequencyOffset) > recentreFraction * chain->m_bandwidth))
+        {
+            // Locked, but off centre by enough for the filter to cut into the multiplex: start
+            // again centred on it, and say nothing of this lock
+            shift += status.m_frequencyOffset;
+
+            if (verbose) {
+                fprintf(stderr, "dvbt-rx: recentring by %.0f Hz\n", shift);
+            }
+
+            chain.reset(new Chain(candidates[candidate], rate));
+            acquiringSince = seconds;
+            continue;
+        }
 
         if (status.m_state != dvbt::OFDMDemod::Acquire)
         {
@@ -410,6 +460,7 @@ int main(int argc, char **argv)
         else if ((candidates.size() > 1) && (seconds - acquiringSince >= trySeconds))
         {
             candidate = (candidate + 1) % candidates.size();
+            shift = 0.0;
             chain.reset(new Chain(candidates[candidate], rate));
             acquiringSince = seconds;
             status = chain->m_demod.getStatus();
@@ -423,7 +474,7 @@ int main(int argc, char **argv)
             // A first line that says nothing is locked waits for every width to have had its turn
             if (printed || report.m_locked || (seconds >= trySeconds * candidates.size() + 1.0))
             {
-                print(report, status, report.m_locked ? rippleOf(chain->m_demod) : std::string("null"));
+                print(report, status, report.m_locked ? rippleOf(chain->m_demod) : std::string("null"), shift);
                 last = report;
                 printed = true;
                 printedAt = seconds;
